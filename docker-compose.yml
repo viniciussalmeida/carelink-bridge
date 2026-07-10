@@ -1,0 +1,11 @@
+services:
+  carelink-bridge:
+    image: ${CARELINK_BRIDGE_IMAGE:-ghcr.io/viniciussalmeida/carelink-bridge}:${CARELINK_BRIDGE_TAG:-latest}
+    pull_policy: always
+    container_name: carelink-bridge
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./logindata.json:/app/logindata.json
