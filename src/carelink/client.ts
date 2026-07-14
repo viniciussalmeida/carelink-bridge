@@ -3,7 +3,14 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import axios, { type AxiosInstance } from 'axios';
 import * as logger from '../logger.js';
-import { loadLoginData, saveLoginData, isTokenExpired, refreshToken } from './token.js';
+import {
+  loadLoginData,
+  saveLoginData,
+  isTokenExpired,
+  isRefreshTokenLikelyExpired,
+  isRefreshFatalError,
+  refreshToken,
+} from './token.js';
 import { loadProxyList, createProxyAgent, ProxyRotator } from './proxy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings } from '../types/carelink.js';
@@ -114,14 +121,47 @@ export class CareLinkClient {
     }
 
     if (isTokenExpired(loginData.access_token)) {
+      const previousRefreshToken = loginData.refresh_token;
       try {
         loginData = await refreshToken(loginData);
-        saveLoginData(this.loginDataPath, loginData);
+        try {
+          saveLoginData(this.loginDataPath, loginData);
+        } catch (saveError) {
+          const rotated = loginData.refresh_token !== previousRefreshToken;
+          console.error(
+            '[Token] Failed to persist refreshed tokens to logindata.json:',
+            (saveError as Error).message,
+          );
+          if (rotated) {
+            console.error('[Token] Refresh token rotated but was not persisted; a restart may require re-login.');
+          }
+        }
       } catch (e) {
-        // Delete stale logindata so next startup triggers re-login
-        try { fs.unlinkSync(this.loginDataPath); } catch { /* ignore */ }
-        console.error('[Token] Deleted logindata.json — run "npm run login" to re-authenticate.');
-        throw new Error('Refresh token expired. Run "npm run login" to log in again.');
+        const fatal = isRefreshFatalError(e) || isRefreshTokenLikelyExpired(loginData);
+
+        if (!fatal) {
+          console.error('[Token] Temporary refresh error. Keeping logindata.json and retrying later.');
+          throw new Error('Temporary refresh failure. Will retry automatically.');
+        }
+
+        let deleted = false;
+        try {
+          fs.unlinkSync(this.loginDataPath);
+          deleted = true;
+        } catch (unlinkError) {
+          console.error(
+            '[Token] Could not delete stale logindata.json:',
+            (unlinkError as Error).message,
+          );
+        }
+
+        if (deleted) {
+          console.error('[Token] Deleted stale logindata.json — run "npm run login" to re-authenticate.');
+        } else {
+          console.error('[Token] Stale logindata.json kept on disk — run "npm run login" to re-authenticate.');
+        }
+
+        throw new Error('Refresh token no longer valid. Run "npm run login" to log in again.');
       }
     }
 

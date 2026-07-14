@@ -82,6 +82,7 @@ export interface LoginData {
   client_id: string;
   token_url: string;
   audience?: string;
+  refresh_expires_at?: number;
 }
 
 export interface Auth0SSOConfig {
