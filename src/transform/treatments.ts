@@ -146,6 +146,10 @@ function markerContext(marker: Record<string, unknown>): string {
   const insulin = extractNumberFromKeys(marker, ['amount', 'insulin', 'value', 'deliveredFastAmount', 'deliveredAmount']);
   if (insulin !== undefined) parts.push(`insulin=${insulin}`);
 
+  const bolusAmount = extractNumberFromKeys(marker, ['bolusAmount', 'autoBasalBolus'])
+    ?? extractNumberFromPaths(marker, ['data.bolusAmount', 'payload.bolusAmount']);
+  if (bolusAmount !== undefined) parts.push(`bolusAmount=${bolusAmount}`);
+
   return parts.join(' ');
 }
 
@@ -174,8 +178,15 @@ function markerDiagnostics(markers: CareLinkMarker[]): {
     byCategory[category] = (byCategory[category] || 0) + 1;
 
     const record = marker as Record<string, unknown>;
-    const basalSignal = extractNumberFromKeys(record, ['basalRate', 'rate', 'deliveredRate'])
-      ?? extractNumberFromPaths(record, ['data.basalRate', 'data.rate', 'payload.basalRate', 'payload.rate']);
+    const basalSignal = extractNumberFromKeys(record, ['basalRate', 'rate', 'deliveredRate', 'bolusAmount', 'autoBasalBolus'])
+      ?? extractNumberFromPaths(record, [
+        'data.basalRate',
+        'data.rate',
+        'payload.basalRate',
+        'payload.rate',
+        'data.bolusAmount',
+        'payload.bolusAmount',
+      ]);
     if (basalSignal != null && basalSignal > 0) {
       basalSignalMarkers++;
     }
@@ -367,7 +378,7 @@ function markerToTreatment(
   if (category === 'AUTO_BASAL_DELIVERY') {
     if (!options.enableAutoBasalTreatments) return null;
 
-    const absolute = extractNumberFromKeys(numericMarker, [
+    const directRate = extractNumberFromKeys(numericMarker, [
       'basalRate',
       'amount',
       'value',
@@ -380,7 +391,16 @@ function markerToTreatment(
       'payload.basalRate',
       'payload.rate',
     ]);
-    const duration = extractNumberFromKeys(numericMarker, [
+
+    const autoBasalBolus = extractNumberFromKeys(numericMarker, [
+      'bolusAmount',
+      'autoBasalBolus',
+    ]) ?? extractNumberFromPaths(numericMarker, [
+      'data.bolusAmount',
+      'payload.bolusAmount',
+    ]);
+
+    const durationRaw = extractNumberFromKeys(numericMarker, [
       'duration',
       'durationMinutes',
       'effectiveDuration',
@@ -392,14 +412,28 @@ function markerToTreatment(
       'payload.durationMinutes',
     ]);
 
+    const duration = durationRaw && durationRaw > 0
+      ? durationRaw
+      : (autoBasalBolus && autoBasalBolus > 0 ? 5 : undefined);
+
+    const derivedRate = autoBasalBolus && autoBasalBolus > 0
+      ? autoBasalBolus * (60 / (duration || 5))
+      : undefined;
+
+    const absolute = directRate && directRate > 0 ? directRate : derivedRate;
+
     if (!absolute || absolute <= 0) return null;
+
+    const sourceLabel = directRate && directRate > 0
+      ? 'source=rate'
+      : `source=bolusAmount bolus=${autoBasalBolus}`;
 
     return {
       ...base,
       eventType: 'Temp Basal',
       absolute,
       duration: duration && duration > 0 ? duration : undefined,
-      notes: `[carelink:${kind}] autobasal absolute=${absolute}${markerContext(numericMarker) ? ` ${markerContext(numericMarker)}` : ''}`,
+      notes: `[carelink:${kind}] autobasal absolute=${absolute} ${sourceLabel}${markerContext(numericMarker) ? ` ${markerContext(numericMarker)}` : ''}`,
     };
   }
 

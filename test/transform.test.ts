@@ -137,6 +137,24 @@ describe('transform()', () => {
       expect(result.treatments[0].duration).toBe(10);
     });
 
+    it('should map AUTO_BASAL_DELIVERY bolusAmount to derived hourly Temp Basal', () => {
+      const result = transform(data({
+        markers: [
+          {
+            type: 'AUTO_BASAL_DELIVERY',
+            datetime: 'Oct 20, 2015 08:14:00',
+            bolusAmount: 0.1,
+          },
+        ],
+      }));
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Temp Basal');
+      expect(result.treatments[0].absolute).toBeCloseTo(1.2, 6);
+      expect(result.treatments[0].duration).toBe(5);
+      expect(result.treatments[0].notes).toContain('source=bolusAmount');
+    });
+
     it('should skip AUTO_BASAL_DELIVERY when disabled', () => {
       const result = transform(
         data({

@@ -78,7 +78,7 @@ function extractNestedNumber(record: Record<string, unknown>, path: string): num
 }
 
 function extractNumericBasalSignal(marker: Record<string, unknown>): number | undefined {
-  const directKeys = ['basalRate', 'rate', 'deliveredRate', 'amount', 'value'];
+  const directKeys = ['basalRate', 'rate', 'deliveredRate', 'amount', 'value', 'bolusAmount', 'autoBasalBolus'];
   for (const key of directKeys) {
     const value = marker[key];
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -95,6 +95,8 @@ function extractNumericBasalSignal(marker: Record<string, unknown>): number | un
     'payload.basalRate',
     'payload.rate',
     'payload.amount',
+    'data.bolusAmount',
+    'payload.bolusAmount',
   ];
   for (const path of nestedPaths) {
     const value = extractNestedNumber(marker, path);
