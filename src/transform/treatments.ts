@@ -149,6 +149,46 @@ function markerContext(marker: Record<string, unknown>): string {
   return parts.join(' ');
 }
 
+function markerDiagnostics(markers: CareLinkMarker[]): {
+  total: number;
+  byKind: Array<[string, number]>;
+  byCategory: Record<string, number>;
+  basalSignalMarkers: number;
+} {
+  const byKind = new Map<string, number>();
+  const byCategory: Record<string, number> = {
+    MEAL: 0,
+    INSULIN: 0,
+    AUTO_BASAL_DELIVERY: 0,
+    AUTO_CORRECTION_BOLUS: 0,
+    UNKNOWN: 0,
+  };
+
+  let basalSignalMarkers = 0;
+
+  for (const marker of markers) {
+    const kind = markerKind(marker) || 'UNKNOWN_KIND';
+    byKind.set(kind, (byKind.get(kind) || 0) + 1);
+
+    const category = markerCategory(kind);
+    byCategory[category] = (byCategory[category] || 0) + 1;
+
+    const record = marker as Record<string, unknown>;
+    const basalSignal = extractNumberFromKeys(record, ['basalRate', 'rate', 'deliveredRate'])
+      ?? extractNumberFromPaths(record, ['data.basalRate', 'data.rate', 'payload.basalRate', 'payload.rate']);
+    if (basalSignal != null && basalSignal > 0) {
+      basalSignalMarkers++;
+    }
+  }
+
+  return {
+    total: markers.length,
+    byKind: [...byKind.entries()].sort((a, b) => b[1] - a[1]),
+    byCategory,
+    basalSignalMarkers,
+  };
+}
+
 function markerToTreatment(
   marker: CareLinkMarker,
   device: string,
@@ -445,6 +485,7 @@ export function markerAndNotificationTreatments(
 
   const markers = toArray<CareLinkMarker>(data.markers);
   const notificationHistory = toArray<CareLinkNotification>(data.notificationHistory);
+  const diagnostics = markerDiagnostics(markers);
 
   const markerTreatments = markers
     .map((marker) => markerToTreatment(marker, device, offsetMilliseconds, options))
@@ -475,6 +516,18 @@ export function markerAndNotificationTreatments(
     notificationTreatments.length,
     'fallbackAutoBasal=',
     fallbackAutoBasal ? 'yes' : 'no',
+  );
+
+  logger.log(
+    '[Treatments] markerCategories=',
+    JSON.stringify(diagnostics.byCategory),
+    'basalSignalMarkers=',
+    diagnostics.basalSignalMarkers,
+  );
+
+  logger.log(
+    '[Treatments] markerKindsTop=',
+    JSON.stringify(diagnostics.byKind.slice(0, 12)),
   );
 
   if (data.therapyAlgorithmState) {
