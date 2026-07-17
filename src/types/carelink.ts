@@ -22,6 +22,27 @@ export interface CareLinkAlarm {
   code: number;
 }
 
+export interface CareLinkMarker {
+  type?: string;
+  kind?: string;
+  datetime?: string;
+  amount?: number;
+  value?: number;
+  carbs?: number;
+  duration?: number;
+  basalRate?: number;
+  [key: string]: unknown;
+}
+
+export interface CareLinkNotification {
+  type?: string;
+  code?: number;
+  datetime?: string;
+  message?: string;
+  kind?: string;
+  [key: string]: unknown;
+}
+
 export interface CareLinkData {
   sgs: CareLinkSG[];
   lastSG: CareLinkSG;
@@ -44,6 +65,9 @@ export interface CareLinkData {
   reservoirAmount?: number;
   activeInsulin?: CareLinkActiveInsulin;
   lastAlarm?: CareLinkAlarm;
+  markers?: CareLinkMarker[];
+  notificationHistory?: CareLinkNotification[];
+  therapyAlgorithmState?: Record<string, unknown>;
   bgUnits?: string;
   bgunits?: string;
   timeFormat?: string;

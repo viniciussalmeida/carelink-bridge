@@ -3,10 +3,87 @@ import { data, makeSG } from './fixtures.js';
 import { transform } from '../src/transform/index.js';
 
 describe('transform()', () => {
+  it('should return no treatments by default when no markers are present', () => {
+    const result = transform(data());
+    expect(result.treatments).toEqual([]);
+  });
+
   it('should obey sgvLimit', () => {
     const d = data();
     expect(transform(d).entries).toHaveLength(d.sgs.length);
     expect(transform(d, 4).entries).toHaveLength(4);
+  });
+
+  describe('treatments', () => {
+    it('should map meal and insulin markers to Nightscout treatments', () => {
+      const result = transform(data({
+        markers: [
+          { type: 'MEAL', datetime: 'Oct 20, 2015 08:00:00', amount: 32 },
+          { type: 'INSULIN', datetime: 'Oct 20, 2015 08:05:00', amount: 2.3 },
+        ],
+      }));
+
+      expect(result.treatments).toHaveLength(2);
+      expect(result.treatments[0].eventType).toBe('Carb Correction');
+      expect(result.treatments[0].carbs).toBe(32);
+      expect(result.treatments[1].eventType).toBe('Bolus');
+      expect(result.treatments[1].insulin).toBe(2.3);
+      expect(result.treatments[0].id).toBeDefined();
+      expect(result.treatments[1].id).toBeDefined();
+    });
+
+    it('should map AUTO_BASAL_DELIVERY when enabled', () => {
+      const result = transform(data({
+        markers: [
+          {
+            type: 'AUTO_BASAL_DELIVERY',
+            datetime: 'Oct 20, 2015 08:10:00',
+            basalRate: 0.75,
+            duration: 5,
+          },
+        ],
+      }));
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Temp Basal');
+      expect(result.treatments[0].absolute).toBe(0.75);
+      expect(result.treatments[0].duration).toBe(5);
+    });
+
+    it('should skip AUTO_BASAL_DELIVERY when disabled', () => {
+      const result = transform(
+        data({
+          markers: [
+            {
+              type: 'AUTO_BASAL_DELIVERY',
+              datetime: 'Oct 20, 2015 08:10:00',
+              basalRate: 0.75,
+              duration: 5,
+            },
+          ],
+        }),
+        { enableAutoBasalTreatments: false },
+      );
+
+      expect(result.treatments).toHaveLength(0);
+    });
+
+    it('should obey treatmentsLimit', () => {
+      const result = transform(
+        data({
+          markers: [
+            { type: 'MEAL', datetime: 'Oct 20, 2015 08:00:00', amount: 10 },
+            { type: 'MEAL', datetime: 'Oct 20, 2015 08:05:00', amount: 20 },
+            { type: 'MEAL', datetime: 'Oct 20, 2015 08:10:00', amount: 30 },
+          ],
+        }),
+        { treatmentsLimit: 2 },
+      );
+
+      expect(result.treatments).toHaveLength(2);
+      expect(result.treatments[0].carbs).toBe(20);
+      expect(result.treatments[1].carbs).toBe(30);
+    });
   });
 
   it('should include pump device family', () => {

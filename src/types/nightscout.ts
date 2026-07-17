@@ -36,7 +36,20 @@ export interface NightscoutDeviceStatus {
   };
 }
 
+export interface NightscoutTreatment {
+  eventType: string;
+  created_at: string;
+  enteredBy: string;
+  notes?: string;
+  insulin?: number;
+  carbs?: number;
+  duration?: number;
+  absolute?: number;
+  id?: string;
+}
+
 export interface TransformResult {
   devicestatus: NightscoutDeviceStatus[];
   entries: NightscoutSGVEntry[];
+  treatments: NightscoutTreatment[];
 }

@@ -85,6 +85,10 @@ All settings go in the `.env` file. Only the first four are required — the res
 | `MMCONNECT_COUNTRYCODE` | `gb` | Your country code (e.g. `us`, `de`, `nl`) |
 | `CARELINK_INTERVAL` | `300` | How often to fetch data, in seconds (300 = 5 minutes) |
 | `CARELINK_PATIENT` | | Patient username, only needed if your care partner account has multiple patients |
+| `CARELINK_ENABLE_TREATMENTS` | `true` | Upload CareLink marker-derived treatments to Nightscout |
+| `CARELINK_ENABLE_AUTO_BASAL_TREATMENTS` | `true` | Include `AUTO_BASAL_DELIVERY` markers as Temp Basal treatments |
+| `CARELINK_ENABLE_NOTIFICATIONS` | `false` | Upload CareLink notification history as Announcement treatments |
+| `CARELINK_TREATMENTS_LIMIT` | `72` | Max number of treatments sent per poll cycle |
 | `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs |
 
 ## For developers

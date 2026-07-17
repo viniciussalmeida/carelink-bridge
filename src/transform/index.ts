@@ -3,6 +3,7 @@ import type { CareLinkData } from '../types/carelink.js';
 import type { NightscoutSGVEntry, NightscoutDeviceStatus, TransformResult } from '../types/nightscout.js';
 import { CARELINK_TREND_TO_NIGHTSCOUT_TREND } from './trend-map.js';
 import { guessPumpOffset, guessPumpOffsetMilliseconds } from './pump-offset.js';
+import { markerAndNotificationTreatments, type TreatmentTransformOptions } from './treatments.js';
 
 const STALE_DATA_THRESHOLD_MINUTES = 20;
 
@@ -115,21 +116,52 @@ function sgvEntries(
   return sgvs;
 }
 
-export function transform(data: CareLinkData, sgvLimit?: number): TransformResult {
+export interface TransformOptions extends TreatmentTransformOptions {
+  sgvLimit: number;
+}
+
+function normalizeOptions(input?: number | Partial<TransformOptions>): TransformOptions {
+  if (typeof input === 'number') {
+    return {
+      sgvLimit: input,
+      enableTreatments: true,
+      enableAutoBasalTreatments: true,
+      enableNotifications: false,
+      treatmentsLimit: 72,
+    };
+  }
+
+  return {
+    sgvLimit: input?.sgvLimit ?? Infinity,
+    enableTreatments: input?.enableTreatments ?? true,
+    enableAutoBasalTreatments: input?.enableAutoBasalTreatments ?? true,
+    enableNotifications: input?.enableNotifications ?? false,
+    treatmentsLimit: input?.treatmentsLimit ?? 72,
+  };
+}
+
+export function transform(data: CareLinkData, optionsInput?: number | Partial<TransformOptions>): TransformResult {
+  const options = normalizeOptions(optionsInput);
   const recency =
     (data.currentServerTime - data.lastMedicalDeviceDataUpdateServerTime) / (60 * 1000);
 
   if (recency > STALE_DATA_THRESHOLD_MINUTES) {
     logger.log('Stale CareLink data: ' + recency.toFixed(2) + ' minutes old');
-    return { devicestatus: [], entries: [] };
+    return { devicestatus: [], entries: [], treatments: [] };
   }
 
   const offset = guessPumpOffset(data);
   const offsetMilliseconds = guessPumpOffsetMilliseconds(data);
-  const limit = sgvLimit ?? Infinity;
+  const treatments = markerAndNotificationTreatments(
+    data,
+    deviceName(data),
+    offsetMilliseconds,
+    options,
+  );
 
   return {
     devicestatus: [deviceStatusEntry(data, offset, offsetMilliseconds)],
-    entries: sgvEntries(data, offset, offsetMilliseconds).slice(-limit),
+    entries: sgvEntries(data, offset, offsetMilliseconds).slice(-options.sgvLimit),
+    treatments,
   };
 }
