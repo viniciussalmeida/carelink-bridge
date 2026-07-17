@@ -189,6 +189,35 @@ function markerDiagnostics(markers: CareLinkMarker[]): {
   };
 }
 
+function pickScalarProperties(record: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function markerSamples(markers: CareLinkMarker[], kind: string, maxSamples: number): Array<Record<string, unknown>> {
+  const targetKind = kind.toUpperCase();
+  return markers
+    .filter((marker) => markerKind(marker) === targetKind)
+    .slice(0, Math.max(0, maxSamples))
+    .map((marker) => {
+      const record = marker as Record<string, unknown>;
+      const sample: Record<string, unknown> = pickScalarProperties(record);
+
+      const data = asRecord(record['data']);
+      if (data) sample['data'] = pickScalarProperties(data);
+
+      const payload = asRecord(record['payload']);
+      if (payload) sample['payload'] = pickScalarProperties(payload);
+
+      return sample;
+    });
+}
+
 function markerToTreatment(
   marker: CareLinkMarker,
   device: string,
@@ -529,6 +558,14 @@ export function markerAndNotificationTreatments(
     '[Treatments] markerKindsTop=',
     JSON.stringify(diagnostics.byKind.slice(0, 12)),
   );
+
+  const debugMarkerSamples = (process.env['CARELINK_DEBUG_MARKER_SAMPLES'] || 'false').toLowerCase() === 'true';
+  if (debugMarkerSamples) {
+    logger.log(
+      '[Treatments] AUTO_BASAL_DELIVERY samples=',
+      JSON.stringify(markerSamples(markers, 'AUTO_BASAL_DELIVERY', 3)),
+    );
+  }
 
   if (data.therapyAlgorithmState) {
     logger.log('[SmartGuard] therapyAlgorithmState=', JSON.stringify(data.therapyAlgorithmState));

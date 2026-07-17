@@ -21,6 +21,149 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 const MAX_REQUESTS_PER_FETCH = 30;
 const DEFAULT_MAX_RETRY_DURATION = 512;
 
+interface CarepartnerPayloadSummary {
+  markerCount: number;
+  autoBasalCount: number;
+  autoBasalWithNumericValue: number;
+  insulinCount: number;
+  mealCount: number;
+  unknownCount: number;
+  therapyKeys: string[];
+  therapyHasNumericBasalRate: boolean;
+  markerKindsTop: Array<[string, number]>;
+}
+
+function envFlag(name: string): boolean {
+  return (process.env[name] || 'false').toLowerCase() === 'true';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function toRecordArray(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => !!asRecord(item));
+  }
+
+  const record = asRecord(value);
+  if (!record) return [];
+
+  for (const key of ['items', 'history', 'notifications', 'markers', 'data', 'value']) {
+    if (Array.isArray(record[key])) {
+      return (record[key] as unknown[])
+        .filter((item): item is Record<string, unknown> => !!asRecord(item));
+    }
+  }
+
+  return [record];
+}
+
+function extractNestedNumber(record: Record<string, unknown>, path: string): number | undefined {
+  const parts = path.split('.');
+  let current: unknown = record;
+
+  for (const part of parts) {
+    if (!current || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+
+  if (typeof current === 'number' && Number.isFinite(current)) return current;
+  if (typeof current === 'string') {
+    const parsed = Number.parseFloat(current);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function extractNumericBasalSignal(marker: Record<string, unknown>): number | undefined {
+  const directKeys = ['basalRate', 'rate', 'deliveredRate', 'amount', 'value'];
+  for (const key of directKeys) {
+    const value = marker[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = Number.parseFloat(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+
+  const nestedPaths = [
+    'data.basalRate',
+    'data.rate',
+    'data.amount',
+    'payload.basalRate',
+    'payload.rate',
+    'payload.amount',
+  ];
+  for (const path of nestedPaths) {
+    const value = extractNestedNumber(marker, path);
+    if (value !== undefined) return value;
+  }
+
+  return undefined;
+}
+
+function summarizeCarepartnerPayload(data: CareLinkData): CarepartnerPayloadSummary {
+  const markers = toRecordArray(data.markers);
+  const kinds = new Map<string, number>();
+
+  let autoBasalCount = 0;
+  let autoBasalWithNumericValue = 0;
+  let insulinCount = 0;
+  let mealCount = 0;
+  let unknownCount = 0;
+
+  for (const marker of markers) {
+    const kind = String(marker['type'] || marker['kind'] || 'UNKNOWN').toUpperCase();
+    kinds.set(kind, (kinds.get(kind) || 0) + 1);
+
+    if (kind.includes('AUTO') && kind.includes('BASAL')) {
+      autoBasalCount++;
+      const value = extractNumericBasalSignal(marker);
+      if (value != null && value > 0) autoBasalWithNumericValue++;
+      continue;
+    }
+
+    if (kind === 'INSULIN' || kind.includes('BOLUS') || kind.includes('INSULIN')) {
+      insulinCount++;
+      continue;
+    }
+
+    if (kind === 'MEAL' || kind.includes('MEAL') || kind.includes('CARB')) {
+      mealCount++;
+      continue;
+    }
+
+    unknownCount++;
+  }
+
+  const therapy = asRecord(data.therapyAlgorithmState);
+  const therapyKeys = therapy ? Object.keys(therapy).sort() : [];
+  const therapyHasNumericBasalRate = !!therapy && [
+    'autoBasalRate',
+    'currentAutoBasalRate',
+    'activeBasalRate',
+    'safeBasalRate',
+  ].some((key) => {
+    const value = therapy[key];
+    return (typeof value === 'number' && Number.isFinite(value))
+      || (typeof value === 'string' && Number.isFinite(Number.parseFloat(value)));
+  });
+
+  return {
+    markerCount: markers.length,
+    autoBasalCount,
+    autoBasalWithNumericValue,
+    insulinCount,
+    mealCount,
+    unknownCount,
+    therapyKeys,
+    therapyHasNumericBasalRate,
+    markerKindsTop: [...kinds.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12),
+  };
+}
+
 export interface CareLinkClientOptions {
   username: string;
   password: string;
@@ -219,20 +362,28 @@ export class CareLinkClient {
 
     logger.log('Data retrieval URL:', dataRetrievalUrl);
 
+    const debugCompareEndpoints = envFlag('CARELINK_DEBUG_COMPARE_ENDPOINTS');
+
     // Try multiple API versions
-    const endpoints = [
+    const endpoints = Array.from(new Set([
       dataRetrievalUrl,
       dataRetrievalUrl.replace('/v6/', '/v5/'),
       dataRetrievalUrl.replace('/v6/', '/v11/'),
       dataRetrievalUrl.replace('/v5/', '/v6/'),
       dataRetrievalUrl.replace('/v5/', '/v11/'),
-    ];
+    ]));
 
     const body: Record<string, string> = {
       username: this.options.username,
       role: 'carepartner',
       patientId,
     };
+
+    const successfulResponses: Array<{
+      endpoint: string;
+      data: CareLinkData;
+      summary: CarepartnerPayloadSummary;
+    }> = [];
 
     for (const endpoint of endpoints) {
       try {
@@ -241,12 +392,62 @@ export class CareLinkClient {
           headers: { 'Content-Type': 'application/json' },
         });
         if (resp.status === 200) {
-          logger.log('GET data (as carepartner)', endpoint);
-          return resp.data;
+          const summary = summarizeCarepartnerPayload(resp.data);
+          logger.log(
+            'GET data (as carepartner)',
+            endpoint,
+            JSON.stringify({
+              markerCount: summary.markerCount,
+              autoBasalCount: summary.autoBasalCount,
+              autoBasalWithNumericValue: summary.autoBasalWithNumericValue,
+              therapyHasNumericBasalRate: summary.therapyHasNumericBasalRate,
+            }),
+          );
+
+          successfulResponses.push({ endpoint, data: resp.data, summary });
+          if (!debugCompareEndpoints) {
+            return resp.data;
+          }
         }
       } catch {
         logger.log('Endpoint failed:', endpoint);
       }
+    }
+
+    if (successfulResponses.length > 0) {
+      if (!debugCompareEndpoints) {
+        return successfulResponses[0].data;
+      }
+
+      const scored = successfulResponses.map((entry) => {
+        const score =
+          entry.summary.autoBasalWithNumericValue * 10_000 +
+          entry.summary.autoBasalCount * 100 +
+          (entry.summary.therapyHasNumericBasalRate ? 5_000 : 0) +
+          entry.summary.markerCount;
+        return { ...entry, score };
+      });
+
+      scored.sort((a, b) => b.score - a.score);
+
+      logger.log(
+        '[CarePartner compare] endpoint summaries=',
+        JSON.stringify(
+          scored.map((entry) => ({
+            endpoint: entry.endpoint,
+            score: entry.score,
+            markerCount: entry.summary.markerCount,
+            autoBasalCount: entry.summary.autoBasalCount,
+            autoBasalWithNumericValue: entry.summary.autoBasalWithNumericValue,
+            therapyHasNumericBasalRate: entry.summary.therapyHasNumericBasalRate,
+            therapyKeys: entry.summary.therapyKeys,
+            markerKindsTop: entry.summary.markerKindsTop,
+          })),
+        ),
+      );
+
+      logger.log('[CarePartner compare] selected endpoint:', scored[0].endpoint);
+      return scored[0].data;
     }
 
     throw new Error('All carepartner data endpoints failed');

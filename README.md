@@ -90,6 +90,8 @@ All settings go in the `.env` file. Only the first four are required — the res
 | `CARELINK_ENABLE_NOTIFICATIONS` | `false` | Upload CareLink notification history as Announcement treatments |
 | `CARELINK_TREATMENTS_LIMIT` | `72` | Max number of treatments sent per poll cycle |
 | `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs |
+| `CARELINK_DEBUG_COMPARE_ENDPOINTS` | `false` | Compare carepartner payload richness across v6/v5/v11 endpoints and log selected endpoint |
+| `CARELINK_DEBUG_MARKER_SAMPLES` | `false` | Log redacted sample `AUTO_BASAL_DELIVERY` marker payloads for field discovery |
 
 ## For developers
 
