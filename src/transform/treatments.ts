@@ -96,8 +96,9 @@ function extractNumberFromPaths(record: Record<string, unknown>, paths: string[]
   return undefined;
 }
 
-function markerCategory(kind: string): 'MEAL' | 'INSULIN' | 'AUTO_BASAL_DELIVERY' | 'UNKNOWN' {
+function markerCategory(kind: string): 'MEAL' | 'INSULIN' | 'AUTO_BASAL_DELIVERY' | 'AUTO_CORRECTION_BOLUS' | 'UNKNOWN' {
   if (kind === 'MEAL' || kind.includes('MEAL') || kind.includes('CARB')) return 'MEAL';
+  if (kind.includes('AUTO') && kind.includes('CORRECTION')) return 'AUTO_CORRECTION_BOLUS';
   if (kind === 'INSULIN' || kind.includes('INSULIN') || kind.includes('BOLUS')) return 'INSULIN';
   if (kind === 'AUTO_BASAL_DELIVERY' || (kind.includes('AUTO') && kind.includes('BASAL'))) {
     return 'AUTO_BASAL_DELIVERY';
@@ -113,6 +114,39 @@ function markerTimestamp(marker: CareLinkMarker): string | undefined {
   return extractTimestamp(marker.datetime)
     || extractTimestamp(marker['dateTime'])
     || extractTimestamp(marker['timestamp']);
+}
+
+function markerFlag(marker: Record<string, unknown>, keys: string[]): boolean {
+  for (const key of keys) {
+    const value = marker[key];
+    if (value === true) return true;
+    if (typeof value === 'string' && ['true', 'yes', '1'].includes(value.toLowerCase())) return true;
+    if (typeof value === 'number' && value === 1) return true;
+  }
+  return false;
+}
+
+function markerContext(marker: Record<string, unknown>): string {
+  const parts: string[] = [];
+
+  const source = extractStringFromKeys(marker, ['source', 'origin', 'entryType', 'deliveryType']);
+  if (source) parts.push(`source=${source}`);
+
+  if (markerFlag(marker, ['autoCorrectionBolus', 'automaticCorrection', 'isAutoCorrection', 'autoCorrection'])) {
+    parts.push('autoCorrection=true');
+  }
+
+  if (markerFlag(marker, ['mealBolus', 'foodBolus', 'enteredFood', 'carbBolus'])) {
+    parts.push('mealBolus=true');
+  }
+
+  const carbs = extractNumberFromKeys(marker, ['carbs', 'carbInput', 'mealCarbs']);
+  if (carbs !== undefined) parts.push(`carbs=${carbs}`);
+
+  const insulin = extractNumberFromKeys(marker, ['amount', 'insulin', 'value', 'deliveredFastAmount', 'deliveredAmount']);
+  if (insulin !== undefined) parts.push(`insulin=${insulin}`);
+
+  return parts.join(' ');
 }
 
 function markerToTreatment(
@@ -157,11 +191,11 @@ function markerToTreatment(
       ...base,
       eventType: 'Carb Correction',
       carbs,
-      notes: `[carelink:${kind}] carbs=${carbs}`,
+      notes: `[carelink:${kind}] meal carbs=${carbs}${markerContext(numericMarker) ? ` ${markerContext(numericMarker)}` : ''}`,
     };
   }
 
-  if (category === 'INSULIN') {
+  if (category === 'AUTO_CORRECTION_BOLUS') {
     const insulin = extractNumberFromKeys(numericMarker, [
       'amount',
       'insulin',
@@ -192,9 +226,72 @@ function markerToTreatment(
     if (!insulin || insulin <= 0) return null;
     return {
       ...base,
+      eventType: 'Correction Bolus',
+      insulin,
+      notes: `[carelink:${kind}] auto correction bolus insulin=${insulin}${markerContext(numericMarker) ? ` ${markerContext(numericMarker)}` : ''}`,
+    };
+  }
+
+  if (category === 'INSULIN') {
+    const autoCorrection = markerFlag(numericMarker, [
+      'autoCorrectionBolus',
+      'automaticCorrection',
+      'isAutoCorrection',
+      'autoCorrection',
+    ]) || (kind.includes('AUTO') && kind.includes('CORRECTION'));
+    const mealBolus = markerFlag(numericMarker, [
+      'mealBolus',
+      'foodBolus',
+      'enteredFood',
+      'carbBolus',
+    ]);
+
+    const insulin = extractNumberFromKeys(numericMarker, [
+      'amount',
+      'insulin',
+      'value',
+      'deliveredFastAmount',
+      'programmedFastAmount',
+      'deliveredAmount',
+      'insulinAmount',
+      'normal',
+      'bolusVolumeDelivered',
+      'requestedBolusAmount',
+      'totalDeliveredBolus',
+    ]) ?? extractNumberFromPaths(numericMarker, [
+      'data.amount',
+      'data.insulin',
+      'data.value',
+      'data.deliveredFastAmount',
+      'data.programmedFastAmount',
+      'data.deliveredAmount',
+      'data.insulinAmount',
+      'payload.amount',
+      'payload.insulin',
+      'payload.deliveredFastAmount',
+      'payload.deliveredAmount',
+      'bolus.amount',
+      'bolus.deliveredFastAmount',
+    ]);
+    if (!insulin || insulin <= 0) return null;
+
+    const context = markerContext(numericMarker);
+    const mealLabel = mealBolus ? ' meal bolus' : '';
+
+    if (autoCorrection) {
+      return {
+        ...base,
+        eventType: 'Correction Bolus',
+        insulin,
+        notes: `[carelink:${kind}] auto correction bolus insulin=${insulin}${mealLabel}${context ? ` ${context}` : ''}`,
+      };
+    }
+
+    return {
+      ...base,
       eventType: 'Bolus',
       insulin,
-      notes: `[carelink:${kind}] insulin=${insulin}`,
+      notes: `[carelink:${kind}] bolus insulin=${insulin}${mealLabel}${context ? ` ${context}` : ''}`,
     };
   }
 
@@ -233,7 +330,7 @@ function markerToTreatment(
       eventType: 'Temp Basal',
       absolute,
       duration: duration && duration > 0 ? duration : undefined,
-      notes: `[carelink:${kind}] absolute=${absolute}`,
+      notes: `[carelink:${kind}] autobasal absolute=${absolute}${markerContext(numericMarker) ? ` ${markerContext(numericMarker)}` : ''}`,
     };
   }
 
@@ -324,7 +421,7 @@ function smartGuardAutoBasalFallbackTreatment(
     enteredBy: 'carelink-bridge',
     absolute: rate,
     duration: duration && duration > 0 ? duration : undefined,
-    notes: `[carelink:AUTO_BASAL_STATE] absolute=${rate}${stateLabel}`,
+    notes: `[carelink:AUTO_BASAL_STATE] smartguard autobasal absolute=${rate}${stateLabel}`,
   };
 }
 
@@ -379,6 +476,10 @@ export function markerAndNotificationTreatments(
     'fallbackAutoBasal=',
     fallbackAutoBasal ? 'yes' : 'no',
   );
+
+  if (data.therapyAlgorithmState) {
+    logger.log('[SmartGuard] therapyAlgorithmState=', JSON.stringify(data.therapyAlgorithmState));
+  }
 
   return withDeterministicIds([
     ...markerTreatments,

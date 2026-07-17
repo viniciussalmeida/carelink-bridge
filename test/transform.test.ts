@@ -64,6 +64,44 @@ describe('transform()', () => {
       expect(result.treatments[0].insulin).toBe(2.7);
     });
 
+    it('should label SmartGuard auto correction boluses distinctly', () => {
+      const result = transform(data({
+        markers: [
+          {
+            type: 'BOLUS',
+            datetime: 'Oct 20, 2015 08:22:00',
+            amount: 1.1,
+            autoCorrectionBolus: true,
+          },
+        ],
+      }));
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Correction Bolus');
+      expect(result.treatments[0].insulin).toBe(1.1);
+      expect(result.treatments[0].notes).toContain('auto correction bolus');
+    });
+
+    it('should keep meal boluses annotated as food boluses', () => {
+      const result = transform(data({
+        markers: [
+          {
+            type: 'INSULIN',
+            datetime: 'Oct 20, 2015 08:24:00',
+            amount: 3.4,
+            mealBolus: true,
+            carbs: 28,
+          },
+        ],
+      }));
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Bolus');
+      expect(result.treatments[0].insulin).toBe(3.4);
+      expect(result.treatments[0].notes).toContain('meal bolus');
+      expect(result.treatments[0].notes).toContain('carbs=28');
+    });
+
     it('should map AUTO_BASAL_DELIVERY when enabled', () => {
       const result = transform(data({
         markers: [
