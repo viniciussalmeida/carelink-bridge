@@ -32,6 +32,38 @@ describe('transform()', () => {
       expect(result.treatments[1].id).toBeDefined();
     });
 
+    it('should map insulin markers with bolus-like kind and deliveredFastAmount', () => {
+      const result = transform(data({
+        markers: [
+          {
+            type: 'BOLUS',
+            datetime: 'Oct 20, 2015 08:15:00',
+            deliveredFastAmount: 1.9,
+          },
+        ],
+      }));
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Bolus');
+      expect(result.treatments[0].insulin).toBe(1.9);
+    });
+
+    it('should map insulin markers with nested payload amount', () => {
+      const result = transform(data({
+        markers: [
+          {
+            type: 'INSULIN',
+            datetime: 'Oct 20, 2015 08:20:00',
+            payload: { amount: 2.7 },
+          },
+        ],
+      }));
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Bolus');
+      expect(result.treatments[0].insulin).toBe(2.7);
+    });
+
     it('should map AUTO_BASAL_DELIVERY when enabled', () => {
       const result = transform(data({
         markers: [
@@ -48,6 +80,23 @@ describe('transform()', () => {
       expect(result.treatments[0].eventType).toBe('Temp Basal');
       expect(result.treatments[0].absolute).toBe(0.75);
       expect(result.treatments[0].duration).toBe(5);
+    });
+
+    it('should map auto basal markers using generic auto basal kind and nested rate', () => {
+      const result = transform(data({
+        markers: [
+          {
+            type: 'AUTO_BASAL',
+            datetime: 'Oct 20, 2015 08:12:00',
+            data: { rate: 0.55, durationMinutes: 10 },
+          },
+        ],
+      }));
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Temp Basal');
+      expect(result.treatments[0].absolute).toBe(0.55);
+      expect(result.treatments[0].duration).toBe(10);
     });
 
     it('should skip AUTO_BASAL_DELIVERY when disabled', () => {

@@ -36,6 +36,41 @@ function extractNumberFromKeys(record: Record<string, unknown>, keys: string[]):
   return undefined;
 }
 
+function extractNestedNumber(record: Record<string, unknown>, path: string): number | undefined {
+  const segments = path.split('.');
+  let current: unknown = record;
+
+  for (const segment of segments) {
+    if (!current || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+
+  if (typeof current === 'number' && Number.isFinite(current)) return current;
+  if (typeof current === 'string') {
+    const parsed = Number.parseFloat(current);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return undefined;
+}
+
+function extractNumberFromPaths(record: Record<string, unknown>, paths: string[]): number | undefined {
+  for (const path of paths) {
+    const value = extractNestedNumber(record, path);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function markerCategory(kind: string): 'MEAL' | 'INSULIN' | 'AUTO_BASAL_DELIVERY' | 'UNKNOWN' {
+  if (kind === 'MEAL' || kind.includes('MEAL') || kind.includes('CARB')) return 'MEAL';
+  if (kind === 'INSULIN' || kind.includes('INSULIN') || kind.includes('BOLUS')) return 'INSULIN';
+  if (kind === 'AUTO_BASAL_DELIVERY' || (kind.includes('AUTO') && kind.includes('BASAL'))) {
+    return 'AUTO_BASAL_DELIVERY';
+  }
+  return 'UNKNOWN';
+}
+
 function markerKind(marker: CareLinkMarker): string {
   return String(marker.type || marker.kind || '').toUpperCase();
 }
@@ -53,6 +88,7 @@ function markerToTreatment(
   options: TreatmentTransformOptions,
 ): NightscoutTreatment | null {
   const kind = markerKind(marker);
+  const category = markerCategory(kind);
   const timestampText = markerTimestamp(marker);
   if (!kind || !timestampText) return null;
 
@@ -66,8 +102,22 @@ function markerToTreatment(
 
   const numericMarker = marker as Record<string, unknown>;
 
-  if (kind === 'MEAL') {
-    const carbs = extractNumberFromKeys(numericMarker, ['carbs', 'amount', 'value', 'quantity']);
+  if (category === 'MEAL') {
+    const carbs = extractNumberFromKeys(numericMarker, [
+      'carbs',
+      'amount',
+      'value',
+      'quantity',
+      'carbInput',
+      'mealCarbs',
+    ]) ?? extractNumberFromPaths(numericMarker, [
+      'data.carbs',
+      'data.carbInput',
+      'data.mealCarbs',
+      'data.amount',
+      'payload.carbs',
+      'payload.amount',
+    ]);
     if (!carbs || carbs <= 0) return null;
     return {
       ...base,
@@ -77,8 +127,34 @@ function markerToTreatment(
     };
   }
 
-  if (kind === 'INSULIN') {
-    const insulin = extractNumberFromKeys(numericMarker, ['amount', 'insulin', 'value']);
+  if (category === 'INSULIN') {
+    const insulin = extractNumberFromKeys(numericMarker, [
+      'amount',
+      'insulin',
+      'value',
+      'deliveredFastAmount',
+      'programmedFastAmount',
+      'deliveredAmount',
+      'insulinAmount',
+      'normal',
+      'bolusVolumeDelivered',
+      'requestedBolusAmount',
+      'totalDeliveredBolus',
+    ]) ?? extractNumberFromPaths(numericMarker, [
+      'data.amount',
+      'data.insulin',
+      'data.value',
+      'data.deliveredFastAmount',
+      'data.programmedFastAmount',
+      'data.deliveredAmount',
+      'data.insulinAmount',
+      'payload.amount',
+      'payload.insulin',
+      'payload.deliveredFastAmount',
+      'payload.deliveredAmount',
+      'bolus.amount',
+      'bolus.deliveredFastAmount',
+    ]);
     if (!insulin || insulin <= 0) return null;
     return {
       ...base,
@@ -88,11 +164,33 @@ function markerToTreatment(
     };
   }
 
-  if (kind === 'AUTO_BASAL_DELIVERY') {
+  if (category === 'AUTO_BASAL_DELIVERY') {
     if (!options.enableAutoBasalTreatments) return null;
 
-    const absolute = extractNumberFromKeys(numericMarker, ['basalRate', 'amount', 'value']);
-    const duration = extractNumberFromKeys(numericMarker, ['duration', 'durationMinutes']);
+    const absolute = extractNumberFromKeys(numericMarker, [
+      'basalRate',
+      'amount',
+      'value',
+      'rate',
+      'deliveredRate',
+    ]) ?? extractNumberFromPaths(numericMarker, [
+      'data.basalRate',
+      'data.rate',
+      'data.amount',
+      'payload.basalRate',
+      'payload.rate',
+    ]);
+    const duration = extractNumberFromKeys(numericMarker, [
+      'duration',
+      'durationMinutes',
+      'effectiveDuration',
+      'length',
+    ]) ?? extractNumberFromPaths(numericMarker, [
+      'data.duration',
+      'data.durationMinutes',
+      'payload.duration',
+      'payload.durationMinutes',
+    ]);
 
     if (!absolute || absolute <= 0) return null;
 
