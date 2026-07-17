@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { CareLinkData, CareLinkMarker, CareLinkNotification } from '../types/carelink.js';
 import type { NightscoutTreatment } from '../types/nightscout.js';
+import * as logger from '../logger.js';
 
 export interface TreatmentTransformOptions {
   enableTreatments: boolean;
@@ -32,6 +33,14 @@ function toArray<T>(value: unknown): T[] {
   }
 
   return [record as T];
+}
+
+function extractStringFromKeys(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim() !== '') return value;
+  }
+  return undefined;
 }
 
 function parsePumpTime(pumpTimeString: string, offsetMilliseconds: number): number {
@@ -257,6 +266,68 @@ function notificationToTreatment(
   };
 }
 
+function smartGuardAutoBasalFallbackTreatment(
+  data: CareLinkData,
+  offsetMilliseconds: number,
+  options: TreatmentTransformOptions,
+): NightscoutTreatment | null {
+  if (!options.enableAutoBasalTreatments) {
+    return null;
+  }
+
+  const algorithm = asRecord(data.therapyAlgorithmState);
+  if (!algorithm) {
+    return null;
+  }
+
+  const rate = extractNumberFromKeys(algorithm, [
+    'autoBasalRate',
+    'currentAutoBasalRate',
+    'activeBasalRate',
+    'microBolusEquivalentRate',
+    'safeBasalRate',
+  ]) ?? extractNumberFromPaths(algorithm, [
+    'autoBasal.rate',
+    'autoBasal.currentRate',
+    'safeBasal.rate',
+  ]);
+
+  if (!rate || rate <= 0) {
+    return null;
+  }
+
+  const smartGuardState = extractStringFromKeys(algorithm, [
+    'smartGuardState',
+    'autoModeState',
+    'state',
+    'status',
+  ]);
+
+  const duration = extractNumberFromKeys(algorithm, [
+    'effectiveDuration',
+    'durationMinutes',
+  ]) ?? extractNumberFromPaths(algorithm, [
+    'autoBasal.durationMinutes',
+    'safeBasal.durationMinutes',
+  ]);
+
+  const timestampText = data.sMedicalDeviceTime;
+  const createdAt = Number.isFinite(Date.parse(timestampText))
+    ? asIsoString(parsePumpTime(timestampText, offsetMilliseconds))
+    : asIsoString(data.lastMedicalDeviceDataUpdateServerTime);
+
+  const stateLabel = smartGuardState ? ` state=${smartGuardState}` : '';
+
+  return {
+    eventType: 'Temp Basal',
+    created_at: createdAt,
+    enteredBy: 'carelink-bridge',
+    absolute: rate,
+    duration: duration && duration > 0 ? duration : undefined,
+    notes: `[carelink:AUTO_BASAL_STATE] absolute=${rate}${stateLabel}`,
+  };
+}
+
 function withDeterministicIds(treatments: NightscoutTreatment[]): NightscoutTreatment[] {
   return treatments.map((treatment) => {
     const identity = `${treatment.eventType}|${treatment.created_at}|${treatment.insulin ?? ''}|${treatment.carbs ?? ''}|${treatment.duration ?? ''}|${treatment.absolute ?? ''}|${treatment.notes ?? ''}`;
@@ -282,13 +353,38 @@ export function markerAndNotificationTreatments(
     .map((marker) => markerToTreatment(marker, device, offsetMilliseconds, options))
     .filter((value): value is NightscoutTreatment => value !== null);
 
+  const autoBasalTreatments = markerTreatments.filter(
+    treatment => treatment.eventType === 'Temp Basal',
+  );
+
+  const fallbackAutoBasal = autoBasalTreatments.length === 0
+    ? smartGuardAutoBasalFallbackTreatment(data, offsetMilliseconds, options)
+    : null;
+
   const notificationTreatments = options.enableNotifications
     ? notificationHistory
         .map((notification) => notificationToTreatment(notification, offsetMilliseconds))
         .filter((value): value is NightscoutTreatment => value !== null)
     : [];
 
-  return withDeterministicIds([...markerTreatments, ...notificationTreatments])
+  logger.log(
+    '[Treatments] markers=',
+    markers.length,
+    'notifications=',
+    notificationHistory.length,
+    'mappedMarkerTreatments=',
+    markerTreatments.length,
+    'mappedNotificationTreatments=',
+    notificationTreatments.length,
+    'fallbackAutoBasal=',
+    fallbackAutoBasal ? 'yes' : 'no',
+  );
+
+  return withDeterministicIds([
+    ...markerTreatments,
+    ...(fallbackAutoBasal ? [fallbackAutoBasal] : []),
+    ...notificationTreatments,
+  ])
     .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
     .slice(-Math.max(0, options.treatmentsLimit));
 }

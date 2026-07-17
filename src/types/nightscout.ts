@@ -31,6 +31,10 @@ export interface NightscoutDeviceStatus {
     conduitInRange: boolean;
     conduitMedicalDeviceInRange: boolean;
     conduitSensorInRange: boolean;
+    smartGuardState?: string;
+    autoModeEnabled?: boolean;
+    autoBasalRate?: number;
+    therapyAlgorithmState?: Record<string, unknown>;
     medicalDeviceBatteryLevelPercent?: number;
     medicalDeviceFamily?: string;
   };

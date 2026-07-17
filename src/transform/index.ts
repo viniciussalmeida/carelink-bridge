@@ -22,6 +22,44 @@ function timestampAsString(timestamp: number): string {
   return new Date(timestamp).toISOString();
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function extractString(record: Record<string, unknown> | null, keys: string[]): string | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim() !== '') return value;
+  }
+  return undefined;
+}
+
+function extractBoolean(record: Record<string, unknown> | null, keys: string[]): boolean | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'boolean') return value;
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+  }
+  return undefined;
+}
+
+function extractNumber(record: Record<string, unknown> | null, keys: string[]): number | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = Number.parseFloat(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
 function deviceName(data: CareLinkData): string {
   return 'connect-' + data.medicalDeviceFamily.toLowerCase();
 }
@@ -31,6 +69,39 @@ function deviceStatusEntry(
   offset: string,
   offsetMilliseconds: number,
 ): NightscoutDeviceStatus {
+  const algorithm = asRecord(data.therapyAlgorithmState);
+  const smartGuardState = extractString(algorithm, [
+    'smartGuardState',
+    'autoModeState',
+    'state',
+    'status',
+  ]);
+  const autoModeEnabled = extractBoolean(algorithm, [
+    'autoModeEnabled',
+    'isAutoMode',
+    'smartGuardEnabled',
+  ]);
+  const autoBasalRate = extractNumber(algorithm, [
+    'autoBasalRate',
+    'currentAutoBasalRate',
+    'activeBasalRate',
+    'safeBasalRate',
+  ]);
+
+  const connectBase = {
+    sensorState: data.sensorState,
+    calibStatus: data.calibStatus,
+    sensorDurationHours: data.sensorDurationHours,
+    timeToNextCalibHours: data.timeToNextCalibHours,
+    conduitInRange: data.conduitInRange,
+    conduitMedicalDeviceInRange: data.conduitMedicalDeviceInRange,
+    conduitSensorInRange: data.conduitSensorInRange,
+    smartGuardState,
+    autoModeEnabled,
+    autoBasalRate,
+    therapyAlgorithmState: algorithm || undefined,
+  };
+
   if (data.medicalDeviceFamily === 'GUARDIAN') {
     return {
       created_at: timestampAsString(data.lastMedicalDeviceDataUpdateServerTime),
@@ -39,13 +110,7 @@ function deviceStatusEntry(
         battery: data.medicalDeviceBatteryLevelPercent,
       },
       connect: {
-        sensorState: data.sensorState,
-        calibStatus: data.calibStatus,
-        sensorDurationHours: data.sensorDurationHours,
-        timeToNextCalibHours: data.timeToNextCalibHours,
-        conduitInRange: data.conduitInRange,
-        conduitMedicalDeviceInRange: data.conduitMedicalDeviceInRange,
-        conduitSensorInRange: data.conduitSensorInRange,
+        ...connectBase,
         medicalDeviceBatteryLevelPercent: data.medicalDeviceBatteryLevelPercent,
         medicalDeviceFamily: data.medicalDeviceFamily,
       },
@@ -71,15 +136,7 @@ function deviceStatusEntry(
         parsePumpTime(data.sMedicalDeviceTime, offset, offsetMilliseconds)
       ),
     },
-    connect: {
-      sensorState: data.sensorState,
-      calibStatus: data.calibStatus,
-      sensorDurationHours: data.sensorDurationHours,
-      timeToNextCalibHours: data.timeToNextCalibHours,
-      conduitInRange: data.conduitInRange,
-      conduitMedicalDeviceInRange: data.conduitMedicalDeviceInRange,
-      conduitSensorInRange: data.conduitSensorInRange,
-    },
+    connect: connectBase,
   };
 }
 

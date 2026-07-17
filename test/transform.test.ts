@@ -174,6 +174,66 @@ describe('transform()', () => {
       expect(result.treatments[0].eventType).toBe('Bolus');
       expect(result.treatments[0].insulin).toBe(1.2);
     });
+
+    it('should emit fallback auto basal treatment from therapyAlgorithmState', () => {
+      const result = transform(
+        data({
+          markers: [],
+          therapyAlgorithmState: {
+            autoBasalRate: 0.65,
+            smartGuardState: 'ACTIVE',
+            durationMinutes: 5,
+          },
+        }),
+      );
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Temp Basal');
+      expect(result.treatments[0].absolute).toBe(0.65);
+      expect(result.treatments[0].notes).toContain('AUTO_BASAL_STATE');
+    });
+
+    it('should prefer marker-based auto basal over fallback treatment', () => {
+      const result = transform(
+        data({
+          markers: [
+            {
+              type: 'AUTO_BASAL_DELIVERY',
+              datetime: 'Oct 20, 2015 08:40:00',
+              basalRate: 0.5,
+            },
+          ],
+          therapyAlgorithmState: {
+            autoBasalRate: 0.7,
+            smartGuardState: 'ACTIVE',
+          },
+        }),
+      );
+
+      const tempBasals = result.treatments.filter(t => t.eventType === 'Temp Basal');
+      expect(tempBasals).toHaveLength(1);
+      expect(tempBasals[0].absolute).toBe(0.5);
+    });
+  });
+
+  describe('smartguard in devicestatus', () => {
+    it('should include smartguard fields from therapyAlgorithmState', () => {
+      const result = transform(
+        data({
+          therapyAlgorithmState: {
+            smartGuardState: 'ACTIVE',
+            autoModeEnabled: true,
+            autoBasalRate: 0.72,
+          },
+        }),
+      );
+
+      const connect = result.devicestatus[0].connect;
+      expect(connect.smartGuardState).toBe('ACTIVE');
+      expect(connect.autoModeEnabled).toBe(true);
+      expect(connect.autoBasalRate).toBe(0.72);
+      expect(connect.therapyAlgorithmState).toBeDefined();
+    });
   });
 
   it('should include pump device family', () => {
