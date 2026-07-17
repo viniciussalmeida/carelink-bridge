@@ -9,6 +9,31 @@ export interface TreatmentTransformOptions {
   treatmentsLimit: number;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function toArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) {
+    return value as T[];
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const wrappedKeys = ['items', 'history', 'notifications', 'markers', 'data', 'value'];
+  for (const key of wrappedKeys) {
+    if (Array.isArray(record[key])) {
+      return record[key] as T[];
+    }
+  }
+
+  return [record as T];
+}
+
 function parsePumpTime(pumpTimeString: string, offsetMilliseconds: number): number {
   return Date.parse(pumpTimeString) - offsetMilliseconds;
 }
@@ -250,12 +275,15 @@ export function markerAndNotificationTreatments(
     return [];
   }
 
-  const markerTreatments = (data.markers || [])
+  const markers = toArray<CareLinkMarker>(data.markers);
+  const notificationHistory = toArray<CareLinkNotification>(data.notificationHistory);
+
+  const markerTreatments = markers
     .map((marker) => markerToTreatment(marker, device, offsetMilliseconds, options))
     .filter((value): value is NightscoutTreatment => value !== null);
 
   const notificationTreatments = options.enableNotifications
-    ? (data.notificationHistory || [])
+    ? notificationHistory
         .map((notification) => notificationToTreatment(notification, offsetMilliseconds))
         .filter((value): value is NightscoutTreatment => value !== null)
     : [];

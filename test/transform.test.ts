@@ -133,6 +133,47 @@ describe('transform()', () => {
       expect(result.treatments[0].carbs).toBe(20);
       expect(result.treatments[1].carbs).toBe(30);
     });
+
+    it('should handle notificationHistory as an object with wrapped notifications', () => {
+      const result = transform(
+        data({
+          notificationHistory: {
+            notifications: [
+              {
+                type: 'ALARM',
+                datetime: 'Oct 20, 2015 08:25:00',
+                message: 'Low glucose predicted',
+              },
+            ],
+          } as unknown as never[],
+        }),
+        { enableNotifications: true },
+      );
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Announcement');
+      expect(result.treatments[0].notes).toContain('ALARM');
+    });
+
+    it('should handle markers as an object with wrapped items', () => {
+      const result = transform(
+        data({
+          markers: {
+            items: [
+              {
+                type: 'INSULIN',
+                datetime: 'Oct 20, 2015 08:30:00',
+                amount: 1.2,
+              },
+            ],
+          } as unknown as never[],
+        }),
+      );
+
+      expect(result.treatments).toHaveLength(1);
+      expect(result.treatments[0].eventType).toBe('Bolus');
+      expect(result.treatments[0].insulin).toBe(1.2);
+    });
   });
 
   it('should include pump device family', () => {
